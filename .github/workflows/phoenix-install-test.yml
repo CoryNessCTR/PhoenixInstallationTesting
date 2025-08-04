@@ -1,0 +1,150 @@
+name: Kernel Module Matrix Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test-kernel-module:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 22.04 Desktop
+            arch: amd64
+            cloud_image: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+          - name: Ubuntu 24.04 Desktop
+            arch: amd64
+            cloud_image: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+          - name: Ubuntu 22.04 Arm
+            arch: arm64
+            cloud_image: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img
+          - name: Ubuntu 24.04 Arm
+            arch: arm64
+            cloud_image: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
+          - name: Raspberry Pi OS
+            arch: arm64
+            cloud_image: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-03-15/2024-03-15-raspios-bookworm-arm64-lite.img.xz
+          - name: Jetson
+            arch: arm64
+            cloud_image: https://developer.nvidia.com/embedded/L4T/r35_Release_v1.0/JP_SD_5.0.2_b231/Jetson_SD_Xavier_NX/JP502-xnx-sd-card-image-b231.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install QEMU and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-kvm cloud-image-utils wget sshpass qemu-efi-aarch64 qemu-system-aarch64 xz-utils
+
+      - name: Generate SSH Key
+        run: |
+          ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
+          echo "Public key:"
+          cat ~/.ssh/id_rsa.pub
+
+      - name: Download cloud image
+        run: |
+          echo "Downloading cloud image for ${{ matrix.name }}"
+          wget -O base.img "${{ matrix.cloud_image }}" || exit 1
+
+          # Uncompress if needed
+          if [[ base.img == *.xz ]]; then
+            xz -d base.img
+          fi
+
+          cp base.img vm.img
+
+      - name: Prepare cloud-init ISO
+        run: |
+          mkdir -p cloudinit
+          cat > cloudinit/user-data <<EOF
+          #cloud-config
+          users:
+            - name: runner
+              ssh-authorized-keys:
+                - $(cat ~/.ssh/id_rsa.pub)
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+          package_update: true
+          EOF
+
+          cat > cloudinit/meta-data <<EOF
+          instance-id: iid-${{ matrix.name }}
+          local-hostname: qemu-vm
+          EOF
+
+          cloud-localds cloudinit.iso cloudinit/user-data cloudinit/meta-data
+
+      - name: Start QEMU VM
+        run: |
+          ARCH=${{ matrix.arch }}
+
+          # Resize VM image to 8GB
+          qemu-img resize vm.img 8G
+
+          if [ "$ARCH" = "amd64" ]; then
+            qemu-system-x86_64 \
+              -m 2G -smp 2 \
+              -machine accel=tcg \
+              -net nic -net user,hostfwd=tcp::2222-:22 \
+              -drive file=vm.img,if=virtio \
+              -drive file=cloudinit.iso,if=virtio \
+              -daemonize \
+              -display none
+          else
+            qemu-system-aarch64 \
+              -m 2G -smp 2 \
+              -machine virt \
+              -cpu cortex-a57 \
+              -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+              -net nic -net user,hostfwd=tcp::2222-:22 \
+              -drive if=none,file=vm.img,format=raw,id=hd0 \
+              -device virtio-blk-device,drive=hd0 \
+              -drive if=none,file=cloudinit.iso,format=raw,id=cidata \
+              -device virtio-blk-device,drive=cidata \
+              -daemonize \
+              -display none
+          fi
+
+          # Wait for SSH
+          for i in {1..300}; do
+            if ssh -o StrictHostKeyChecking=no -p 2222 runner@127.0.0.1 "echo VM ready"; then
+              break
+            fi
+            echo "Waiting for VM to start..."
+            sleep 10
+          done
+
+      - name: Run kernel module test
+        run: |
+          # Copy repo into VM
+          scp -P 2222 -o StrictHostKeyChecking=no ./install-phoenix.sh runner@127.0.0.1:~
+
+          # Run test
+          ssh -p 2222 -o StrictHostKeyChecking=no runner@127.0.0.1 <<'EOF'
+            set -eux
+            cd ~
+
+            sudo apt-get install -y linux-modules-extra-$(uname -r)
+            sudo modprobe can
+            sudo modprobe can_raw
+            sudo modprobe can_dev
+
+            echo "Waiting for cloud-init to finish"
+            sudo cloud-init status --wait || true
+
+            uname -r
+            uname -a
+            echo "Installing now..."
+            ./install-phoenix.sh
+            lsmod | grep canivore || (echo "Module not loaded" && exit 1)
+          EOF
+
+      - name: Shutdown VM
+        if: always()
+        run: |
+          ssh -p 2222 -o StrictHostKeyChecking=no runner@127.0.0.1 "sudo poweroff" || true
