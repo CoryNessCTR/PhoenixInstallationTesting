@@ -22,19 +22,19 @@ jobs:
           - name: Ubuntu 22.04 Arm
             arch: arm64
             cloud_image: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-arm64.img
-            runs: ubuntu-arm
+            runs: ubuntu-24.04-arm
           - name: Ubuntu 24.04 Arm
             arch: arm64
             cloud_image: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
-            runs: ubuntu-arm
+            runs: ubuntu-24.04-arm
           - name: Raspberry Pi OS
             arch: arm64
             cloud_image: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-03-15/2024-03-15-raspios-bookworm-arm64-lite.img.xz
-            runs: ubuntu-arm
+            runs: ubuntu-24.04-arm
           - name: Jetson
             arch: arm64
             cloud_image: https://developer.nvidia.com/embedded/L4T/r35_Release_v1.0/JP_SD_5.0.2_b231/Jetson_SD_Xavier_NX/JP502-xnx-sd-card-image-b231.zip
-            runs: ubuntu-arm
+            runs: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.runs }}
     steps:
