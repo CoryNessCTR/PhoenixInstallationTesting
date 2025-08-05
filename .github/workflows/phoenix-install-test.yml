@@ -3,7 +3,7 @@ name: Kernel Module Matrix Test
 on:
   push:
     branches: [ main ]
-  pull_request:
+  worfklow-dispatch:
 
 jobs:
   test-kernel-module:
