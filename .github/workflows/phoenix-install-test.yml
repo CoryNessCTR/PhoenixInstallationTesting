@@ -104,7 +104,7 @@ jobs:
           else
             qemu-system-aarch64 \
               -m 2G -smp 2 \
-              -machine virt \
+              -machine accel=tcg \
               -cpu cortex-a57 \
               -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
               -net nic -net user,hostfwd=tcp::2222-:22 \
